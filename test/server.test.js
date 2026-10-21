@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createApplicationServer } from "../server.js";
+import { rankJobs } from "../server/matching.js";
+import { listJobs } from "../server/catalog.js";
+import { candidates } from "../server/seed-data.js";
 
 async function withServer(run) {
   const application = await createApplicationServer();
@@ -20,16 +23,39 @@ test("public catalog and match routes use fictional data", async () => {
     assert.equal(health.data, "synthetic");
 
     const jobs = await (await fetch(`${base}/api/jobs`)).json();
-    assert.equal(jobs.jobs.length, 8);
+    assert.equal(jobs.jobs.length, 7);
+    assert.equal(new Set(jobs.jobs.map((job) => job.canonicalId)).size, 7);
+    assert.deepEqual(jobs.jobs.filter((job) => job.canonicalId === "role-101")
+      .map((job) => job.id), ["job-101"]);
+
+    const overview = await (await fetch(`${base}/api/overview`)).json();
+    assert.deepEqual(overview.catalog, { visibleListings: 7, uniqueRoles: 7, partnerListings: 1 });
 
     const matches = await (await fetch(`${base}/api/matches?candidateId=candidate-001`)).json();
-    assert.equal(matches.jobs.length, 8);
+    assert.equal(matches.jobs.length, 7);
+    assert.equal(new Set(matches.jobs.map((job) => job.canonicalId)).size, 7);
     assert.equal(matches.jobs[0].match.score, 90);
     assert.equal(matches.jobs[0].match.matchedCount, 3);
     assert.equal(matches.jobs[0].match.skillBreakdown[3].matchType, "related");
     assert.equal(JSON.stringify(matches).includes("privateNotes"), false);
   });
 });
+
+for (const order of [[0, 1, 0], [1, 0, 1]]) {
+  test(`match API isolates profile sequence ${order.join(" -> ")}`, async () => {
+    await withServer(async (base) => {
+      for (const index of order) {
+        const candidate = candidates[index];
+        const response = await fetch(`${base}/api/matches?candidateId=${candidate.id}`);
+        assert.equal(response.status, 200);
+        const result = await response.json();
+        assert.equal(result.candidateId, candidate.id);
+        assert.equal(result.scoredForCandidateId, candidate.id);
+        assert.deepEqual(result.jobs, rankJobs(listJobs(), candidate));
+      }
+    });
+  });
+}
 
 test("public candidate summaries omit recruiter-only fields", async () => {
   await withServer(async (base) => {
